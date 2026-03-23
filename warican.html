@@ -13,13 +13,14 @@
         .custom-scrollbar::-webkit-scrollbar { width: 6px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: #f1f1f1; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+        [v-cloak] { display: none; }
     </style>
 </head>
 <body class="bg-gray-50 text-gray-800">
     <div id="root"></div>
 
     <script type="text/babel" data-type="module">
-        const { useState, useEffect, useMemo, useRef } = React;
+        const { useState, useEffect, useMemo } = React;
 
         // --- Firebase Modules (CDN) ---
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-app.js";
@@ -37,11 +38,11 @@
             measurementId: "G-J83RV5KVKG"
         };
 
+        // Initialize Firebase
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getFirestore(app);
 
-        // ランダムな6桁の短いIDを生成する関数
         const generateShortId = () => Math.random().toString(36).substring(2, 8).toUpperCase();
 
         const Icon = ({ name, className }) => {
@@ -50,35 +51,35 @@
 
         function App() {
             const [user, setUser] = useState(null);
-            const [loading, setLoading] = useState(true);
+            const [isAuthChecking, setIsAuthChecking] = useState(true);
+            const [loading, setLoading] = useState(false);
             const [error, setError] = useState('');
             const [toastMsg, setToastMsg] = useState('');
 
-            // イベント管理用のState
+            // イベント管理
             const [currentEventId, setCurrentEventId] = useState(null);
             const [eventName, setEventName] = useState('');
             const [joinInputId, setJoinInputId] = useState('');
             const [isEditingName, setIsEditingName] = useState(false);
             const [tempEventName, setTempEventName] = useState('');
 
-            // データ用State
+            // データ用
             const [members, setMembers] = useState([]);
             const [expenses, setExpenses] = useState([]);
 
-            // フォーム用State
+            // フォーム用
             const [newMemberName, setNewMemberName] = useState('');
             const [expDate, setExpDate] = useState(new Date().toISOString().split('T')[0]);
             const [expPayer, setExpPayer] = useState('');
             const [expAmount, setExpAmount] = useState('');
             const [expDesc, setExpDesc] = useState('');
 
-            // トースト通知を表示する関数
             const showToast = (msg) => {
                 setToastMsg(msg);
                 setTimeout(() => setToastMsg(''), 3000);
             };
 
-            // 1. 初回読み込み時にURLパラメータからイベントIDを取得
+            // 1. URLからID取得
             useEffect(() => {
                 const params = new URLSearchParams(window.location.search);
                 const idFromUrl = params.get('id');
@@ -98,13 +99,13 @@
                         }
                     } else {
                         setUser(currentUser);
-                        setLoading(false);
                     }
+                    setIsAuthChecking(false);
                 });
                 return () => unsubscribeAuth();
             }, []);
 
-            // 3. イベントデータの同期（イベントIDがセットされている時のみ）
+            // 3. データ同期
             useEffect(() => {
                 if (!user || !currentEventId) return;
 
@@ -114,19 +115,19 @@
                 const unsubEvent = onSnapshot(eventRef, (docSnap) => {
                     if (docSnap.exists()) {
                         const data = docSnap.data();
-                        setEventName(data.name || '名称未設定のイベント');
+                        setEventName(data.name || '新しいイベント');
                         setMembers(data.members || []);
-                        if (data.members?.length > 0 && !expPayer) setExpPayer(data.members[0]);
                         setLoading(false);
                         setError('');
                     } else {
-                        // イベントが存在しない場合
-                        setError("指定されたイベントが見つかりません。");
+                        setError("イベントが見つかりません。IDを確認してください。");
                         setLoading(false);
                         setCurrentEventId(null);
-                        window.history.pushState({}, '', window.location.pathname); // URLのパラメータを消す
                     }
-                }, (err) => setError("同期エラー: " + err.message));
+                }, (err) => {
+                    setError("アクセス権限がないか、エラーが発生しました。");
+                    setLoading(false);
+                });
 
                 const expensesRef = collection(db, 'groups', currentEventId, 'expenses');
                 const unsubExpenses = onSnapshot(expensesRef, (snapshot) => {
@@ -138,29 +139,36 @@
                 return () => { unsubEvent(); unsubExpenses(); };
             }, [user, currentEventId]);
 
-            // アイコンの再描画
             useEffect(() => {
                 if (window.lucide) lucide.createIcons();
             });
 
-            // --- イベントの作成・参加・退出 ---
             const handleCreateEvent = async () => {
-                const newId = generateShortId();
-                await setDoc(doc(db, 'groups', newId), {
-                    name: '新しいイベント',
-                    members: [],
-                    createdAt: new Date().toISOString()
-                });
-                setCurrentEventId(newId);
-                window.history.pushState({}, '', `?id=${newId}`);
+                try {
+                    setLoading(true);
+                    const newId = generateShortId();
+                    await setDoc(doc(db, 'groups', newId), {
+                        name: '新しいイベント',
+                        members: [],
+                        createdAt: new Date().toISOString()
+                    });
+                    const newUrl = `${window.location.pathname}?id=${newId}`;
+                    window.history.pushState({}, '', newUrl);
+                    setCurrentEventId(newId);
+                } catch (err) {
+                    setError("作成に失敗しました: " + err.message);
+                } finally {
+                    setLoading(false);
+                }
             };
 
             const handleJoinEvent = (e) => {
                 e.preventDefault();
                 if (!joinInputId.trim()) return;
                 const id = joinInputId.trim().toUpperCase();
+                const newUrl = `${window.location.pathname}?id=${id}`;
+                window.history.pushState({}, '', newUrl);
                 setCurrentEventId(id);
-                window.history.pushState({}, '', `?id=${id}`);
             };
 
             const handleLeaveEvent = () => {
@@ -171,13 +179,18 @@
             };
 
             const copyShareUrl = () => {
-                const dummy = document.createElement('input');
-                document.body.appendChild(dummy);
-                dummy.value = window.location.href;
-                dummy.select();
-                document.execCommand('copy');
-                document.body.removeChild(dummy);
-                showToast('共有用URLをコピーしました！友達に送ってください。');
+                const url = window.location.href;
+                if (navigator.clipboard) {
+                    navigator.clipboard.writeText(url);
+                } else {
+                    const dummy = document.createElement('input');
+                    document.body.appendChild(dummy);
+                    dummy.value = url;
+                    dummy.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(dummy);
+                }
+                showToast('共有用URLをコピーしました！');
             };
 
             const saveEventName = async () => {
@@ -187,7 +200,6 @@
                 setIsEditingName(false);
             };
 
-            // --- メンバー・支出の操作 ---
             const handleAddMember = async (e) => {
                 e.preventDefault();
                 if (!newMemberName.trim()) return;
@@ -203,19 +215,18 @@
                     date: expDate,
                     payer: expPayer,
                     amount: Number(expAmount),
-                    description: expDesc,
+                    description: expDesc || "無題の支出",
                     createdAt: new Date().toISOString()
                 });
                 setExpAmount('');
                 setExpDesc('');
-                showToast('支出を記録しました');
+                showToast('追加しました！');
             };
 
             const handleDeleteExpense = async (id) => {
                 await deleteDoc(doc(db, 'groups', currentEventId, 'expenses', id));
             };
 
-            // --- 精算計算ロジック ---
             const settlementInfo = useMemo(() => {
                 const total = expenses.reduce((s, e) => s + e.amount, 0);
                 const perPerson = members.length > 0 ? total / members.length : 0;
@@ -238,38 +249,41 @@
 
             const formatCurrency = (amt) => new Intl.NumberFormat('ja-JP', { style: 'currency', currency: 'JPY' }).format(amt);
 
-            if (loading && !error && !currentEventId) return <div className="flex h-screen items-center justify-center text-gray-500">読み込み中...</div>;
+            if (isAuthChecking) return <div className="flex h-screen items-center justify-center text-gray-500 font-bold">起動中...</div>;
 
-            // --- 画面1：トップ画面（イベント選択） ---
+            // --- 画面1：トップ画面 ---
             if (!currentEventId) {
                 return (
-                    <div className="min-h-screen flex items-center justify-center p-4">
+                    <div className="min-h-screen flex items-center justify-center p-4 bg-gray-50">
                         <div className="bg-white p-8 rounded-3xl shadow-xl border max-w-md w-full text-center">
                             <div className="bg-blue-600 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-lg shadow-blue-200">
                                 <Icon name="wallet" className="w-8 h-8 text-white"/>
                             </div>
                             <h1 className="text-2xl font-bold mb-2">共有わりかん精算</h1>
-                            <p className="text-gray-500 text-sm mb-8">旅行やイベントの立替を簡単に計算・共有できます</p>
+                            <p className="text-gray-500 text-sm mb-8">イベントごとの立替管理</p>
 
-                            {error && <p className="text-red-500 text-sm mb-4 bg-red-50 p-2 rounded">{error}</p>}
+                            {error && <p className="text-red-500 text-sm mb-4 bg-red-50 p-3 rounded-lg border border-red-100">{error}</p>}
 
-                            <button onClick={handleCreateEvent} className="w-full bg-blue-600 text-white font-bold py-4 rounded-xl hover:bg-blue-700 transition-colors shadow-md mb-8 flex items-center justify-center gap-2">
+                            <button 
+                                onClick={handleCreateEvent} 
+                                disabled={loading}
+                                className="w-full bg-blue-600 text-white font-bold py-4 rounded-xl hover:bg-blue-700 transition-colors shadow-md mb-8 flex items-center justify-center gap-2 disabled:opacity-50"
+                            >
                                 <Icon name="sparkles" className="w-5 h-5"/>
-                                新しいイベントを作成する
+                                {loading ? '作成中...' : '新しいイベントを作成'}
                             </button>
 
                             <div className="relative border-t border-gray-200 mb-8">
-                                <span className="absolute -top-3 left-1/2 -translate-x-1/2 bg-white px-4 text-gray-400 text-sm">または</span>
+                                <span className="absolute -top-3 left-1/2 -translate-x-1/2 bg-white px-4 text-gray-400 text-sm italic">または</span>
                             </div>
 
                             <form onSubmit={handleJoinEvent} className="space-y-3">
-                                <p className="text-sm font-bold text-gray-600 text-left">既存のイベントに参加</p>
                                 <div className="flex gap-2">
                                     <input 
                                         type="text" 
                                         value={joinInputId} 
                                         onChange={(e) => setJoinInputId(e.target.value)} 
-                                        placeholder="イベントID (例: A1B2C3)" 
+                                        placeholder="イベントIDを入力" 
                                         className="flex-1 px-4 py-3 bg-gray-50 border rounded-xl outline-none focus:ring-2 focus:ring-blue-500 font-mono uppercase"
                                     />
                                     <button type="submit" className="bg-gray-800 text-white px-6 rounded-xl font-bold hover:bg-gray-900 transition-colors">参加</button>
@@ -280,160 +294,125 @@
                 );
             }
 
-            // --- 画面2：イベント詳細画面 ---
+            // --- 画面2：詳細画面 ---
             return (
                 <div className="max-w-4xl mx-auto p-4 md:p-8 pb-20">
-                    {/* トースト通知 */}
                     {toastMsg && (
-                        <div className="fixed top-4 left-1/2 -translate-x-1/2 bg-gray-800 text-white px-6 py-3 rounded-full shadow-2xl z-50 flex items-center gap-2 animate-bounce">
-                            <Icon name="check-circle" className="w-5 h-5 text-green-400"/>
+                        <div className="fixed top-4 left-1/2 -translate-x-1/2 bg-gray-800 text-white px-6 py-3 rounded-full shadow-2xl z-50 flex items-center gap-2">
+                            <Icon name="check" className="w-4 h-4 text-green-400"/>
                             {toastMsg}
                         </div>
                     )}
 
-                    {/* イベントヘッダー */}
-                    <header className="mb-8">
+                    <header className="mb-6">
                         <button onClick={handleLeaveEvent} className="text-gray-500 hover:text-gray-800 flex items-center gap-1 text-sm mb-4 transition-colors">
-                            <Icon name="arrow-left" className="w-4 h-4"/> トップに戻る
+                            <Icon name="chevron-left" className="w-4 h-4"/> 戻る
                         </button>
                         
-                        <div className="bg-white p-5 md:p-6 rounded-3xl shadow-sm border flex flex-col md:flex-row md:items-center justify-between gap-4">
+                        <div className="bg-white p-5 rounded-3xl shadow-sm border flex flex-col md:flex-row md:items-center justify-between gap-4">
                             <div className="flex items-center gap-4">
-                                <div className="bg-blue-100 p-3 rounded-2xl text-blue-600"><Icon name="map" className="w-7 h-7"/></div>
+                                <div className="bg-blue-50 p-3 rounded-2xl text-blue-600"><Icon name="map-pin" className="w-6 h-6"/></div>
                                 <div>
                                     {isEditingName ? (
-                                        <div className="flex items-center gap-2">
-                                            <input 
-                                                autoFocus
-                                                value={tempEventName} 
-                                                onChange={e => setTempEventName(e.target.value)}
-                                                onBlur={saveEventName}
-                                                onKeyDown={e => e.key === 'Enter' && saveEventName()}
-                                                className="text-xl font-bold border-b-2 border-blue-500 outline-none bg-transparent"
-                                            />
-                                        </div>
+                                        <input 
+                                            autoFocus
+                                            value={tempEventName} 
+                                            onChange={e => setTempEventName(e.target.value)}
+                                            onBlur={saveEventName}
+                                            onKeyDown={e => e.key === 'Enter' && saveEventName()}
+                                            className="text-xl font-bold border-b-2 border-blue-500 outline-none w-full"
+                                        />
                                     ) : (
-                                        <h1 className="text-xl md:text-2xl font-bold flex items-center gap-2 cursor-pointer group" onClick={() => { setTempEventName(eventName); setIsEditingName(true); }}>
-                                            {eventName}
-                                            <Icon name="pencil" className="w-4 h-4 text-gray-300 group-hover:text-blue-500 transition-colors"/>
+                                        <h1 className="text-xl font-bold flex items-center gap-2 cursor-pointer" onClick={() => { setTempEventName(eventName); setIsEditingName(true); }}>
+                                            {eventName} <Icon name="edit-2" className="w-3 h-3 text-gray-400"/>
                                         </h1>
                                     )}
-                                    <p className="text-sm text-gray-500 font-mono mt-1">ID: {currentEventId}</p>
+                                    <p className="text-xs text-gray-400 font-mono mt-0.5">ID: {currentEventId}</p>
                                 </div>
                             </div>
-                            
-                            <button onClick={copyShareUrl} className="bg-blue-50 text-blue-700 border border-blue-200 px-4 py-2.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 hover:bg-blue-100 transition-colors shrink-0">
-                                <Icon name="share-2" className="w-4 h-4"/>
-                                友達にURLを共有
+                            <button onClick={copyShareUrl} className="bg-blue-600 text-white px-4 py-2.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 hover:bg-blue-700 transition-shadow">
+                                <Icon name="link" className="w-4 h-4"/> 共有URLをコピー
                             </button>
                         </div>
                     </header>
 
-                    {error && <div className="bg-red-50 text-red-700 p-4 rounded-lg mb-6 flex items-start gap-2 border border-red-200">
-                        <Icon name="alert-circle" className="w-5 h-5 shrink-0 mt-0.5"/>
-                        <p className="text-sm">{error}</p>
-                    </div>}
-
-                    {/* メインコンテンツ */}
                     <div className="grid md:grid-cols-3 gap-6">
-                        {/* 左カラム：メンバーと入力 */}
                         <div className="space-y-6">
                             <div className="bg-white p-5 rounded-2xl shadow-sm border">
-                                <h2 className="font-bold flex items-center gap-2 mb-4"><Icon name="users" className="w-5 h-5 text-blue-600"/>参加メンバー</h2>
+                                <h2 className="font-bold flex items-center gap-2 mb-4 text-gray-600"><Icon name="users" className="w-4 h-4"/> メンバー</h2>
                                 <form onSubmit={handleAddMember} className="flex gap-2 mb-4">
-                                    <input type="text" value={newMemberName} onChange={e => setNewMemberName(e.target.value)} placeholder="名前..." className="flex-1 px-3 py-2 bg-gray-50 border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"/>
-                                    <button type="submit" className="bg-gray-800 text-white p-2 rounded-lg hover:bg-gray-900 transition-colors"><Icon name="plus" className="w-5 h-5"/></button>
+                                    <input type="text" value={newMemberName} onChange={e => setNewMemberName(e.target.value)} placeholder="名前" className="flex-1 px-3 py-2 bg-gray-50 border rounded-lg text-sm outline-none"/>
+                                    <button type="submit" className="bg-gray-200 p-2 rounded-lg hover:bg-gray-300 transition-colors"><Icon name="plus" className="w-5 h-5"/></button>
                                 </form>
                                 <div className="flex flex-wrap gap-2">
-                                    {members.length === 0 ? <p className="text-xs text-gray-400">メンバーを登録してください</p> : 
-                                     members.map(m => (
-                                        <div key={m} className="bg-blue-50 border border-blue-100 text-blue-700 px-3 py-1.5 rounded-full text-sm font-medium flex items-center gap-1">
-                                            <Icon name="user" className="w-3 h-3"/> {m}
-                                        </div>
+                                    {members.map(m => (
+                                        <span key={m} className="bg-gray-100 text-gray-700 px-3 py-1 rounded-full text-xs font-bold border">{m}</span>
                                     ))}
+                                    {members.length === 0 && <p className="text-xs text-gray-400 italic">メンバーなし</p>}
                                 </div>
                             </div>
 
                             <div className="bg-white p-5 rounded-2xl shadow-sm border">
-                                <h2 className="font-bold flex items-center gap-2 mb-4"><Icon name="receipt" className="w-5 h-5 text-green-600"/>立て替えを記録</h2>
+                                <h2 className="font-bold flex items-center gap-2 mb-4 text-gray-600"><Icon name="plus-circle" className="w-4 h-4"/> 支出を追加</h2>
                                 <form onSubmit={handleAddExpense} className="space-y-3">
-                                    <input type="date" value={expDate} onChange={e => setExpDate(e.target.value)} className="w-full p-2.5 bg-gray-50 border rounded-xl text-sm outline-none focus:ring-2 focus:ring-green-500"/>
-                                    <select value={expPayer} onChange={e => setExpPayer(e.target.value)} className="w-full p-2.5 bg-gray-50 border rounded-xl text-sm focus:ring-2 focus:ring-green-500 outline-none">
-                                        <option value="">誰が支払いましたか？</option>
+                                    <input type="date" value={expDate} onChange={e => setExpDate(e.target.value)} className="w-full p-2 bg-gray-50 border rounded-lg text-sm"/>
+                                    <select value={expPayer} onChange={e => setExpPayer(e.target.value)} className="w-full p-2 bg-gray-50 border rounded-lg text-sm outline-none">
+                                        <option value="">支払った人を選択</option>
                                         {members.map(m => <option key={m} value={m}>{m}</option>)}
                                     </select>
-                                    <input type="number" placeholder="金額 (円)" value={expAmount} onChange={e => setExpAmount(e.target.value)} className="w-full p-2.5 bg-gray-50 border rounded-xl text-sm focus:ring-2 focus:ring-green-500 outline-none"/>
-                                    <input type="text" placeholder="何に使いましたか？ (例: タクシー代)" value={expDesc} onChange={e => setExpDesc(e.target.value)} className="w-full p-2.5 bg-gray-50 border rounded-xl text-sm focus:ring-2 focus:ring-green-500 outline-none"/>
-                                    <button type="submit" className="w-full bg-green-600 text-white py-3 rounded-xl font-bold hover:bg-green-700 transition-colors flex justify-center items-center gap-2">
-                                        <Icon name="check" className="w-5 h-5"/>
-                                        追加する
-                                    </button>
+                                    <input type="number" placeholder="金額" value={expAmount} onChange={e => setExpAmount(e.target.value)} className="w-full p-2 bg-gray-50 border rounded-lg text-sm outline-none"/>
+                                    <input type="text" placeholder="内容 (ランチなど)" value={expDesc} onChange={e => setExpDesc(e.target.value)} className="w-full p-2 bg-gray-50 border rounded-lg text-sm outline-none"/>
+                                    <button type="submit" className="w-full bg-blue-600 text-white py-2.5 rounded-xl font-bold hover:bg-blue-700">追加</button>
                                 </form>
                             </div>
                         </div>
 
-                        {/* 右カラム：精算結果と履歴 */}
                         <div className="md:col-span-2 space-y-6">
-                            <div className="bg-white p-5 rounded-2xl shadow-sm border border-orange-100">
-                                <h2 className="font-bold flex items-center gap-2 mb-4"><Icon name="calculator" className="w-5 h-5 text-orange-500"/>最終的な精算方法</h2>
-                                <div className="grid grid-cols-2 gap-4 mb-6">
-                                    <div className="bg-gray-50 p-4 rounded-xl border">
-                                        <p className="text-xs text-gray-500 mb-1">イベント合計</p>
-                                        <p className="text-2xl font-bold">{formatCurrency(settlementInfo.total)}</p>
+                            <div className="bg-white p-6 rounded-3xl shadow-sm border border-blue-100">
+                                <h2 className="font-bold mb-4 text-blue-600 flex items-center gap-2"><Icon name="check-square" className="w-5 h-5"/> 精算結果</h2>
+                                <div className="flex justify-between items-center mb-6 bg-blue-50 p-4 rounded-2xl">
+                                    <div>
+                                        <p className="text-xs text-blue-400 font-bold uppercase">合計金額</p>
+                                        <p className="text-2xl font-black text-blue-700">{formatCurrency(settlementInfo.total)}</p>
                                     </div>
-                                    <div className="bg-orange-50 p-4 rounded-xl border border-orange-100">
-                                        <p className="text-xs text-orange-600 mb-1">1人あたり</p>
-                                        <p className="text-2xl font-bold text-orange-700">{formatCurrency(settlementInfo.perPerson)}</p>
+                                    <div className="text-right">
+                                        <p className="text-xs text-blue-400 font-bold uppercase">1人あたり</p>
+                                        <p className="text-xl font-bold text-blue-700">{formatCurrency(settlementInfo.perPerson)}</p>
                                     </div>
                                 </div>
-                                <div className="space-y-3">
+                                <div className="space-y-2">
                                     {settlementInfo.settlements.map((s, i) => (
-                                        <div key={i} className="flex items-center justify-between bg-white p-4 rounded-xl border shadow-sm">
-                                            <div className="flex items-center gap-3">
-                                                <span className="font-bold text-gray-700 bg-gray-100 px-3 py-1 rounded-lg">{s.from}</span>
-                                                <Icon name="arrow-right" className="w-5 h-5 text-gray-400"/>
-                                                <span className="font-bold text-blue-700 bg-blue-50 px-3 py-1 rounded-lg border border-blue-100">{s.to}</span>
+                                        <div key={i} className="flex items-center justify-between bg-white border p-4 rounded-xl shadow-sm">
+                                            <div className="flex items-center gap-2">
+                                                <span className="font-bold text-gray-800">{s.from}</span>
+                                                <Icon name="arrow-right" className="w-4 h-4 text-blue-300"/>
+                                                <span className="font-bold text-blue-600">{s.to}</span>
                                             </div>
-                                            <div className="text-right">
-                                                <p className="text-xs text-gray-500">支払う額</p>
-                                                <span className="font-bold text-xl text-gray-800">{formatCurrency(s.amount)}</span>
-                                            </div>
+                                            <span className="font-black text-lg">{formatCurrency(s.amount)}</span>
                                         </div>
                                     ))}
-                                    {settlementInfo.settlements.length === 0 && (
-                                        <div className="text-center py-8 bg-gray-50 rounded-xl border border-dashed">
-                                            <Icon name="check-circle" className="w-8 h-8 text-gray-300 mx-auto mb-2"/>
-                                            <p className="text-sm text-gray-500 font-medium">現在、精算の必要はありません</p>
-                                        </div>
+                                    {settlementInfo.settlements.length === 0 && members.length > 0 && (
+                                        <p className="text-center py-4 text-gray-400 text-sm italic">精算は不要です</p>
                                     )}
                                 </div>
                             </div>
 
                             <div className="bg-white p-5 rounded-2xl shadow-sm border">
-                                <h2 className="font-bold flex items-center gap-2 mb-4"><Icon name="list" className="w-5 h-5 text-gray-500"/>支出履歴</h2>
-                                <div className="space-y-3 max-h-80 overflow-y-auto custom-scrollbar pr-2">
-                                    {expenses.length === 0 ? <p className="text-center text-gray-400 py-8">まだ記録がありません</p> : 
-                                     expenses.map(e => (
-                                        <div key={e.id} className="flex justify-between items-center p-4 border rounded-xl hover:border-blue-300 group transition-colors bg-gray-50 hover:bg-white">
-                                            <div className="flex items-center gap-4">
-                                                <div className="bg-green-100 text-green-700 w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm shrink-0">
-                                                    {e.payer.charAt(0)}
-                                                </div>
-                                                <div>
-                                                    <p className="font-bold text-gray-800">{e.description || "名称なし"}</p>
-                                                    <p className="text-xs text-gray-500 flex items-center gap-1 mt-1">
-                                                        <Icon name="calendar" className="w-3 h-3"/> {e.date} • {e.payer}が立替
-                                                    </p>
-                                                </div>
+                                <h2 className="font-bold mb-4 text-gray-600">支出履歴</h2>
+                                <div className="space-y-2 max-h-96 overflow-y-auto custom-scrollbar">
+                                    {expenses.map(e => (
+                                        <div key={e.id} className="flex justify-between items-center p-3 border-b hover:bg-gray-50 rounded-lg group">
+                                            <div>
+                                                <p className="font-bold text-sm text-gray-800">{e.description}</p>
+                                                <p className="text-[10px] text-gray-400 uppercase">{e.date} • {e.payer}</p>
                                             </div>
-                                            <div className="flex items-center gap-4">
-                                                <span className="font-bold text-lg">{formatCurrency(e.amount)}</span>
-                                                <button onClick={() => handleDeleteExpense(e.id)} className="text-gray-300 hover:text-red-500 p-2 rounded-lg hover:bg-red-50 transition-all">
-                                                    <Icon name="trash-2" className="w-4 h-4"/>
-                                                </button>
+                                            <div className="flex items-center gap-3">
+                                                <span className="font-bold text-sm">{formatCurrency(e.amount)}</span>
+                                                <button onClick={() => handleDeleteExpense(e.id)} className="text-gray-300 hover:text-red-500 transition-colors"><Icon name="trash-2" className="w-4 h-4"/></button>
                                             </div>
                                         </div>
                                     ))}
+                                    {expenses.length === 0 && <p className="text-center py-8 text-gray-300 text-xs italic">履歴がありません</p>}
                                 </div>
                             </div>
                         </div>

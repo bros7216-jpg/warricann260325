@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>共有わりかん精算アプリ</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React & ReactDOM -->
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <!-- Babel for JSX (ESモジュール対応) -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #f1f1f1; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-800">
+    <div id="root"></div>
+
+    <!-- data-type="module" を指定することで import 構文を有効にします -->
+    <script type="text/babel" data-type="module">
+        const { useState, useEffect, useMemo } = React;
+
+        // --- Firebase Modules (CDN) ---
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-auth.js";
+        import { getFirestore, collection, onSnapshot, addDoc, deleteDoc, doc, setDoc } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-firestore.js";
+
+        // --- Firebase Configuration ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyCMWZArRmeccx3liXYARpnUGH36VBwgr3s",
+            authDomain: "warican-app.firebaseapp.com",
+            projectId: "warican-app",
+            storageBucket: "warican-app.firebasestorage.app",
+            messagingSenderId: "211029573432",
+            appId: "1:211029573432:web:6c646a5ca696686dc20bcd",
+            measurementId: "G-J83RV5KVKG"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        
+        const groupId = "default-group-2024"; 
+
+        const Icon = ({ name, className }) => {
+            return <i data-lucide={name} className={className}></i>;
+        };
+
+        function App() {
+            const [user, setUser] = useState(null);
+            const [loading, setLoading] = useState(true);
+            const [error, setError] = useState('');
+            const [members, setMembers] = useState([]);
+            const [expenses, setExpenses] = useState([]);
+
+            const [newMemberName, setNewMemberName] = useState('');
+            const [expDate, setExpDate] = useState(new Date().toISOString().split('T')[0]);
+            const [expPayer, setExpPayer] = useState('');
+            const [expAmount, setExpAmount] = useState('');
+            const [expDesc, setExpDesc] = useState('');
+
+            useEffect(() => {
+                const unsubscribeAuth = onAuthStateChanged(auth, async (currentUser) => {
+                    if (!currentUser) {
+                        try {
+                            await signInAnonymously(auth);
+                        } catch (err) {
+                            setError("認証エラー: " + err.message);
+                        }
+                    } else {
+                        setUser(currentUser);
+                        setLoading(false);
+                    }
+                });
+                return () => unsubscribeAuth();
+            }, []);
+
+            useEffect(() => {
+                if (!user) return;
+
+                const settingsRef = doc(db, 'groups', groupId);
+                const unsubMembers = onSnapshot(settingsRef, (docSnap) => {
+                    if (docSnap.exists()) {
+                        const data = docSnap.data();
+                        setMembers(data.members || []);
+                        if (data.members?.length > 0 && !expPayer) setExpPayer(data.members[0]);
+                    }
+                }, (err) => setError("同期エラー: " + err.message));
+
+                const expensesRef = collection(db, 'groups', groupId, 'expenses');
+                const unsubExpenses = onSnapshot(expensesRef, (snapshot) => {
+                    const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+                    data.sort((a, b) => new Date(b.date) - new Date(a.date));
+                    setExpenses(data);
+                });
+
+                return () => { unsubMembers(); unsubExpenses(); };
+            }, [user]);
+
+            useEffect(() => {
+                if (window.lucide) lucide.createIcons();
+            }, [loading, members, expenses]);
+
+            const handleAddMember = async (e) => {
+                e.preventDefault();
+                if (!newMemberName.trim()) return;
+                const updated = [...new Set([...members, newMemberName.trim()])];
+                await setDoc(doc(db, 'groups', groupId), { members: updated }, { merge: true });
+                setNewMemberName('');
+            };
+
+            const handleAddExpense = async (e) => {
+                e.preventDefault();
+                if (!expPayer || !expAmount) return;
+                await addDoc(collection(db, 'groups', groupId, 'expenses'), {
+                    date: expDate,
+                    payer: expPayer,
+                    amount: Number(expAmount),
+                    description: expDesc,
+                    createdAt: new Date().toISOString()
+                });
+                setExpAmount('');
+                setExpDesc('');
+            };
+
+            const handleDeleteExpense = async (id) => {
+                await deleteDoc(doc(db, 'groups', groupId, 'expenses', id));
+            };
+
+            const settlementInfo = useMemo(() => {
+                const total = expenses.reduce((s, e) => s + e.amount, 0);
+                const perPerson = members.length > 0 ? total / members.length : 0;
+                const balances = {};
+                members.forEach(m => balances[m] = -perPerson);
+                expenses.forEach(e => { if(balances[e.payer] !== undefined) balances[e.payer] += e.amount; });
+
+                const debtors = Object.keys(balances).filter(k => balances[k] < -0.5).map(k => ({name: k, amt: -balances[k]}));
+                const creditors = Object.keys(balances).filter(k => balances[k] > 0.5).map(k => ({name: k, amt: balances[k]}));
+                const res = [];
+                let i = 0, j = 0;
+                while(i < debtors.length && j < creditors.length) {
+                    const pay = Math.min(debtors[i].amt, creditors[j].amt);
+                    res.push({ from: debtors[i].name, to: creditors[j].name, amount: Math.round(pay) });
+                    debtors[i].amt -= pay; creditors[j].amt -= pay;
+                    if(debtors[i].amt < 1) i++; if(creditors[j].amt < 1) j++;
+                }
+                return { total, perPerson, settlements: res };
+            }, [members, expenses]);
+
+            const formatCurrency = (amt) => new Intl.NumberFormat('ja-JP', { style: 'currency', currency: 'JPY' }).format(amt);
+
+            if (loading && !error) return <div className="flex h-screen items-center justify-center text-gray-500">読み込み中...</div>;
+
+            return (
+                <div className="max-w-4xl mx-auto p-4 md:p-8">
+                    <header className="flex items-center gap-3 mb-8 border-b pb-4">
+                        <div className="bg-blue-600 p-3 rounded-xl text-white"><Icon name="wallet" className="w-6 h-6"/></div>
+                        <h1 className="text-2xl font-bold">共有わりかん精算</h1>
+                    </header>
+
+                    {error && <div className="bg-red-50 text-red-700 p-4 rounded-lg mb-6 flex items-start gap-2 border border-red-200">
+                        <Icon name="alert-circle" className="w-5 h-5 shrink-0 mt-0.5"/>
+                        <p className="text-sm">{error}</p>
+                    </div>}
+
+                    <div className="grid md:grid-cols-3 gap-6">
+                        <div className="space-y-6">
+                            <div className="bg-white p-5 rounded-2xl shadow-sm border">
+                                <h2 className="font-bold flex items-center gap-2 mb-4"><Icon name="users" className="w-5 h-5 text-blue-600"/>メンバー</h2>
+                                <form onSubmit={handleAddMember} className="flex gap-2 mb-4">
+                                    <input type="text" value={newMemberName} onChange={e => setNewMemberName(e.target.value)} placeholder="名前..." className="flex-1 px-3 py-2 bg-gray-50 border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"/>
+                                    <button type="submit" className="bg-blue-600 text-white p-2 rounded-lg hover:bg-blue-700 transition-colors"><Icon name="plus" className="w-5 h-5"/></button>
+                                </form>
+                                <div className="flex flex-wrap gap-2">
+                                    {members.length === 0 ? <p className="text-xs text-gray-400">メンバーを登録してください</p> : 
+                                     members.map(m => (
+                                        <div key={m} className="bg-blue-50 text-blue-700 px-3 py-1 rounded-full text-sm font-medium">
+                                            {m}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+
+                            <div className="bg-white p-5 rounded-2xl shadow-sm border">
+                                <h2 className="font-bold flex items-center gap-2 mb-4"><Icon name="receipt" className="w-5 h-5 text-green-600"/>支出入力</h2>
+                                <form onSubmit={handleAddExpense} className="space-y-3">
+                                    <input type="date" value={expDate} onChange={e => setExpDate(e.target.value)} className="w-full p-2 bg-gray-50 border rounded-lg text-sm"/>
+                                    <select value={expPayer} onChange={e => setExpPayer(e.target.value)} className="w-full p-2 bg-gray-50 border rounded-lg text-sm focus:ring-2 focus:ring-green-500 outline-none">
+                                        <option value="">支払った人...</option>
+                                        {members.map(m => <option key={m} value={m}>{m}</option>)}
+                                    </select>
+                                    <input type="number" placeholder="金額 (円)" value={expAmount} onChange={e => setExpAmount(e.target.value)} className="w-full p-2 bg-gray-50 border rounded-lg text-sm focus:ring-2 focus:ring-green-500 outline-none"/>
+                                    <input type="text" placeholder="内容" value={expDesc} onChange={e => setExpDesc(e.target.value)} className="w-full p-2 bg-gray-50 border rounded-lg text-sm focus:ring-2 focus:ring-green-500 outline-none"/>
+                                    <button type="submit" className="w-full bg-green-600 text-white py-2 rounded-lg font-bold hover:bg-green-700 transition-colors">記録を追加</button>
+                                </form>
+                            </div>
+                        </div>
+
+                        <div className="md:col-span-2 space-y-6">
+                            <div className="bg-white p-5 rounded-2xl shadow-sm border">
+                                <h2 className="font-bold mb-4">精算方法</h2>
+                                <div className="grid grid-cols-2 gap-4 mb-6">
+                                    <div className="bg-gray-50 p-4 rounded-xl">
+                                        <p className="text-xs text-gray-500">合計支出</p>
+                                        <p className="text-xl font-bold">{formatCurrency(settlementInfo.total)}</p>
+                                    </div>
+                                    <div className="bg-blue-50 p-4 rounded-xl">
+                                        <p className="text-xs text-blue-500">1人あたり</p>
+                                        <p className="text-xl font-bold text-blue-700">{formatCurrency(settlementInfo.perPerson)}</p>
+                                    </div>
+                                </div>
+                                <div className="space-y-2">
+                                    {settlementInfo.settlements.map((s, i) => (
+                                        <div key={i} className="flex items-center justify-between bg-orange-50 p-3 rounded-lg border border-orange-100">
+                                            <div className="flex items-center gap-2">
+                                                <span className="font-bold">{s.from}</span>
+                                                <Icon name="arrow-right" className="w-4 h-4 text-orange-400"/>
+                                                <span className="font-bold">{s.to}</span>
+                                            </div>
+                                            <span className="font-bold text-orange-600">{formatCurrency(s.amount)}</span>
+                                        </div>
+                                    ))}
+                                    {settlementInfo.settlements.length === 0 && <p className="text-sm text-center text-gray-400 py-4 italic">精算は不要です</p>}
+                                </div>
+                            </div>
+
+                            <div className="bg-white p-5 rounded-2xl shadow-sm border">
+                                <h2 className="font-bold mb-4">支出履歴</h2>
+                                <div className="space-y-2 max-h-80 overflow-y-auto custom-scrollbar">
+                                    {expenses.length === 0 ? <p className="text-center text-gray-400 py-8">データがありません</p> : 
+                                     expenses.map(e => (
+                                        <div key={e.id} className="flex justify-between items-center p-3 border-b last:border-0 hover:bg-gray-50 rounded-lg group transition-colors">
+                                            <div>
+                                                <p className="font-bold text-sm">{e.description || "名称なし"}</p>
+                                                <p className="text-xs text-gray-500">{e.date} | {e.payer}が支払い</p>
+                                            </div>
+                                            <div className="flex items-center gap-4">
+                                                <span className="font-bold">{formatCurrency(e.amount)}</span>
+                                                <button onClick={() => handleDeleteExpense(e.id)} className="text-gray-300 hover:text-red-600 p-1 rounded-md hover:bg-red-50 transition-all"><Icon name="trash-2" className="w-4 h-4"/></button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

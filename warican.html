@@ -219,4 +219,44 @@
                                 <div className="space-y-2">
                                     {settlementInfo.settlements.map((s, i) => (
                                         <div key={i} className="flex items-center justify-between bg-orange-50 p-3 rounded-lg border border-orange-100">
-                                            <div className="flex items-center gap-
+                                            <div className="flex items-center gap-2">
+                                                <span className="font-bold">{s.from}</span>
+                                                <Icon name="arrow-right" className="w-4 h-4 text-orange-400"/>
+                                                <span className="font-bold">{s.to}</span>
+                                            </div>
+                                            <span className="font-bold text-orange-600">{formatCurrency(s.amount)}</span>
+                                        </div>
+                                    ))}
+                                    {settlementInfo.settlements.length === 0 && <p className="text-sm text-center text-gray-400 py-4 italic">精算は不要です</p>}
+                                </div>
+                            </div>
+
+                            <div className="bg-white p-5 rounded-2xl shadow-sm border">
+                                <h2 className="font-bold mb-4">支出履歴</h2>
+                                <div className="space-y-2 max-h-80 overflow-y-auto custom-scrollbar">
+                                    {expenses.length === 0 ? <p className="text-center text-gray-400 py-8">データがありません</p> : 
+                                     expenses.map(e => (
+                                        <div key={e.id} className="flex justify-between items-center p-3 border-b last:border-0 hover:bg-gray-50 rounded-lg group transition-colors">
+                                            <div>
+                                                <p className="font-bold text-sm">{e.description || "名称なし"}</p>
+                                                <p className="text-xs text-gray-500">{e.date} | {e.payer}が支払い</p>
+                                            </div>
+                                            <div className="flex items-center gap-4">
+                                                <span className="font-bold">{formatCurrency(e.amount)}</span>
+                                                <button onClick={() => handleDeleteExpense(e.id)} className="text-gray-300 hover:text-red-600 p-1 rounded-md hover:bg-red-50 transition-all"><Icon name="trash-2" className="w-4 h-4"/></button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
